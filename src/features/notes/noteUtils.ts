@@ -37,6 +37,7 @@ export function metadataFromNote(note: Note): NoteMetadata {
     wordCount: note.wordCount,
     preview: buildPreview(note.content),
     tileColor: note.tileColor,
+    tileLayout: note.tileLayout,
   };
 }
 

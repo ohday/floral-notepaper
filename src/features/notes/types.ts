@@ -1,3 +1,11 @@
+export interface TileLayout {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  collapsed: boolean;
+}
+
 export interface NoteMetadata {
   id: string;
   title: string;
@@ -8,6 +16,7 @@ export interface NoteMetadata {
   wordCount: number;
   preview: string;
   tileColor?: string;
+  tileLayout?: TileLayout;
 }
 
 export interface Note extends Omit<NoteMetadata, "preview"> {
@@ -19,6 +28,7 @@ export interface SaveNoteRequest {
   content: string;
   category: string;
   tileColor?: string;
+  tileLayout?: TileLayout;
 }
 
 export interface ExternalFile {
