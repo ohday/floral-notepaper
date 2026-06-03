@@ -4,6 +4,7 @@ import {
   normalizeTileColor,
   resolveNoteTileColor,
   SYSTEM_TILE_COLOR_LIGHT,
+  TILE_PRESET_COLORS,
 } from "./tileColor";
 
 describe("tile color settings", () => {
@@ -36,6 +37,33 @@ describe("tile color settings", () => {
 
     test("note.tileColor 为短 hex 时被规范化", () => {
       expect(resolveNoteTileColor("abc", "custom", "#cccccc")).toBe("#aabbcc");
+    });
+  });
+
+  describe("TILE_PRESET_COLORS（D4 预设色板）", () => {
+    test("数组长度恰好 8", () => {
+      expect(TILE_PRESET_COLORS).toHaveLength(8);
+    });
+
+    test("hex 集合等于规范集合", () => {
+      const expected = new Set([
+        "fcf9ea",
+        "badfdb",
+        "ffa4a4",
+        "ffbdbd",
+        "dde6ed",
+        "9db2bf",
+        "526d82",
+        "27374d",
+      ]);
+      const actual = new Set(TILE_PRESET_COLORS.map((c) => c.hex));
+      expect(actual).toEqual(expected);
+    });
+
+    test("每条都带 nameKey", () => {
+      for (const color of TILE_PRESET_COLORS) {
+        expect(color.nameKey).toMatch(/^tile\.palette\.preset\./);
+      }
     });
   });
 });

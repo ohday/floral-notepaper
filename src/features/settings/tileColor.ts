@@ -4,6 +4,31 @@ export const DEFAULT_TILE_COLOR = "#f6f3ec";
 export const SYSTEM_TILE_COLOR_LIGHT = "#f6f3ec";
 export const SYSTEM_TILE_COLOR_DARK = "#191919";
 
+/**
+ * 磁贴预设色板（D4，固定 8 色）。
+ * 顺序：第一行（浅色）4 个、第二行（深色）4 个。
+ * UI 渲染时直接 .slice(0, 4) / .slice(4) 拆行。
+ */
+export interface TilePresetColor {
+  /** 6 位小写 hex（不带 #） */
+  hex: string;
+  /** i18n key，三个 locale 同步 */
+  nameKey: string;
+}
+
+export const TILE_PRESET_COLORS: ReadonlyArray<TilePresetColor> = [
+  // 第一行：浅色组
+  { hex: "fcf9ea", nameKey: "tile.palette.preset.fcf9ea" },
+  { hex: "badfdb", nameKey: "tile.palette.preset.badfdb" },
+  { hex: "ffbdbd", nameKey: "tile.palette.preset.ffbdbd" },
+  { hex: "dde6ed", nameKey: "tile.palette.preset.dde6ed" },
+  // 第二行：深色组
+  { hex: "ffa4a4", nameKey: "tile.palette.preset.ffa4a4" },
+  { hex: "9db2bf", nameKey: "tile.palette.preset.9db2bf" },
+  { hex: "526d82", nameKey: "tile.palette.preset.526d82" },
+  { hex: "27374d", nameKey: "tile.palette.preset.27374d" },
+];
+
 const FULL_HEX_COLOR = /^#?([0-9a-fA-F]{6})$/;
 const SHORT_HEX_COLOR = /^#?([0-9a-fA-F]{3})$/;
 

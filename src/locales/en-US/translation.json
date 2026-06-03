@@ -261,6 +261,20 @@
     }
   },
   "tile": {
-    "empty": "Empty"
+    "empty": "Empty",
+    "palette": {
+      "title": "Pick Tile Color",
+      "custom": "Custom Color…",
+      "preset": {
+        "fcf9ea": "Cream",
+        "badfdb": "Mint",
+        "ffa4a4": "Deep Coral",
+        "ffbdbd": "Light Coral",
+        "dde6ed": "Cloud Gray",
+        "9db2bf": "Steel Gray",
+        "526d82": "Indigo",
+        "27374d": "Midnight Blue"
+      }
+    }
   }
 }
