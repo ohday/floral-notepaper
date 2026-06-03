@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { createNote, getErrorMessage, getNote, listNotes, updateNote } from "../features/notes/api";
 import { useImagePaste } from "../features/images/useImagePaste";
 import { useImageBaseDir } from "../features/images/useImageBaseDir";
-import type { Note, NoteMetadata } from "../features/notes/types";
+import type { Note, NoteMetadata, TileLayout } from "../features/notes/types";
 import {
   countNoteChars,
   formatShortDate,
@@ -13,7 +13,13 @@ import {
   metadataFromNote,
 } from "../features/notes/noteUtils";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  availableMonitors,
+  getCurrentWindow,
+  primaryMonitor,
+  type PhysicalPosition,
+  type PhysicalSize,
+} from "@tauri-apps/api/window";
 import {
   animateCurrentWindowBounds,
   closeCurrentWindow,
@@ -36,6 +42,7 @@ import type { TileColorMode } from "../features/settings/types";
 import { shouldSaveBeforeSwitchingToTile } from "../features/windows/noteSurfaceSavePolicy";
 import {
   NOTE_SURFACE_ACTION_EVENT,
+  surfaceActionContextFromEvent,
   surfaceActionFromEvent,
 } from "../features/windows/surfaceActions";
 import {
@@ -49,7 +56,11 @@ import {
   tileSurfaceModeUnpinNoteId,
 } from "../features/windows/tileWindowEvents";
 import { handleMarkdownEnter } from "../features/markdown/useMarkdownAutoComplete";
+import { useTileDoubleClick } from "../features/tile/useTileDoubleClick";
+import { getCaretOffset } from "../features/tile/caretFromPoint";
+import { resolveLayoutBounds, type MonitorRect } from "../features/tile/tileLayout";
 import { Tile } from "./Tile";
+import { TileColorPalette } from "./TileColorPalette";
 
 type OpenMode = "new" | "open";
 type NotePadStatus = "empty" | "opened" | "saved" | "dirty" | "saveFailed" | "copied";
@@ -131,8 +142,26 @@ export function NotePad({
   const [tileRenderMarkdown, setTileRenderMarkdown] = useState(false);
   // 当前打开笔记自带的 tileColor（per-note，最高优先级）；null 表示笔记未自定义
   const [noteTileColor, setNoteTileColor] = useState<string | null>(null);
+  /** 当前打开笔记的磁贴布局（per-note 持久化，D5）；null = 未自定义 */
+  const [noteTileLayout, setNoteTileLayout] = useState<TileLayout | null>(null);
+  const noteTileLayoutRef = useRef<TileLayout | null>(null);
+  // 同步 ref，让 onMoved/onResized 闭包看到最新值
+  noteTileLayoutRef.current = noteTileLayout;
+  const layoutSaveTimerRef = useRef<number | null>(null);
   const [tileEditing, setTileEditing] = useState(false);
+  /** 双击进编辑时，期望 textarea 聚焦后停在的字符偏移（D2）。null = 末尾 */
+  const [pendingCaretOffset, setPendingCaretOffset] = useState<number | null>(null);
+  /** 折叠态（D6）：true 时仅显示标题栏带，正文区隐藏 */
+  const [tileCollapsed, setTileCollapsed] = useState(false);
+  /** 折叠前的窗口尺寸，展开时还原（暂存于内存；Group 9 接入持久化时由 layout 取代） */
+  const preCollapseSizeRef = useRef<{ width: number; height: number } | null>(null);
   const [systemThemeNonce, setSystemThemeNonce] = useState(0);
+  // 调色板 popover 状态（D4）
+  const [paletteState, setPaletteState] = useState<{ open: boolean; x: number; y: number }>({
+    open: false,
+    x: 0,
+    y: 0,
+  });
   const tileRootRef = useRef<HTMLDivElement>(null);
   const tileTextareaRef = useRef<HTMLTextAreaElement>(null);
   const colorPickerRef = useRef<HTMLInputElement>(null);
@@ -176,6 +205,8 @@ export function NotePad({
     setTitle(note.title);
     setContent(note.content);
     setNoteTileColor(note.tileColor ?? null);
+    setNoteTileLayout(note.tileLayout ?? null);
+    setTileCollapsed(note.tileLayout?.collapsed ?? false);
     setMode("new");
     setStatus("opened");
   }, []);
@@ -290,6 +321,8 @@ export function NotePad({
       setTitle("");
       setContent("");
       setNoteTileColor(null);
+      setNoteTileLayout(null);
+      setTileCollapsed(false);
       setMode("new");
       setStatus("empty");
       setErrorMessage(null);
@@ -312,6 +345,7 @@ export function NotePad({
       content,
       category: existingCategory,
       tileColor: noteTileColor ?? undefined,
+      tileLayout: noteTileLayout ?? undefined,
     };
     const note = editingNoteId
       ? await updateNote(editingNoteId, request)
@@ -319,6 +353,7 @@ export function NotePad({
 
     setEditingNoteId(note.id);
     setNoteTileColor(note.tileColor ?? null);
+    setNoteTileLayout(note.tileLayout ?? null);
     setNotes((current) => {
       const metadata = metadataFromNote(note);
       const exists = current.some((item) => item.id === note.id);
@@ -329,7 +364,7 @@ export function NotePad({
     });
     setStatus("saved");
     return note;
-  }, [content, editingNoteId, notes, noteTileColor, title]);
+  }, [content, editingNoteId, notes, noteTileColor, noteTileLayout, title]);
 
   const hasDraftContent = useCallback(
     () => Boolean(editingNoteId || title.trim() || content.trim()),
@@ -404,21 +439,136 @@ export function NotePad({
     void setCurrentWindowAlwaysOnTop(true).catch(() => undefined);
   }, [surfaceMode]);
 
+  // 监听 Tauri Window 的 onMoved / onResized，500ms 防抖后写 note.tile_layout（D5）
+  useEffect(() => {
+    if (surfaceMode !== "tile") return;
+    if (!editingNoteId) return;
+
+    let unlistenMoved: (() => void) | null = null;
+    let unlistenResized: (() => void) | null = null;
+
+    const win = getCurrentWindow();
+
+    const scheduleSave = (next: Partial<TileLayout>) => {
+      const prev = noteTileLayoutRef.current ?? {
+        x: 0,
+        y: 0,
+        width: 280,
+        height: 280,
+        collapsed: tileCollapsed,
+      };
+      const merged: TileLayout = { ...prev, ...next };
+      noteTileLayoutRef.current = merged;
+      setNoteTileLayout(merged);
+      if (layoutSaveTimerRef.current != null) {
+        window.clearTimeout(layoutSaveTimerRef.current);
+      }
+      layoutSaveTimerRef.current = window.setTimeout(() => {
+        // 持久化（debounce 500ms）
+        if (!editingNoteId) return;
+        const existingCategory = notes.find((n) => n.id === editingNoteId)?.category ?? "";
+        void updateNote(editingNoteId, {
+          title,
+          content,
+          category: existingCategory,
+          tileLayout: merged,
+        }).catch(() => undefined);
+      }, 500);
+    };
+
+    void win
+      .onMoved(({ payload }: { payload: PhysicalPosition }) => {
+        scheduleSave({ x: payload.x, y: payload.y });
+      })
+      .then((un) => {
+        unlistenMoved = un;
+      })
+      .catch(() => undefined);
+
+    void win
+      .onResized(({ payload }: { payload: PhysicalSize }) => {
+        // 折叠态时不更新 width/height，避免覆盖展开尺寸
+        if (tileCollapsed) {
+          // 仅在 collapsed 切换时由 toggleCollapse 自己处理
+          return;
+        }
+        scheduleSave({ width: payload.width, height: payload.height });
+      })
+      .then((un) => {
+        unlistenResized = un;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      unlistenMoved?.();
+      unlistenResized?.();
+      if (layoutSaveTimerRef.current != null) {
+        window.clearTimeout(layoutSaveTimerRef.current);
+        layoutSaveTimerRef.current = null;
+      }
+    };
+  }, [content, editingNoteId, notes, surfaceMode, tileCollapsed, title]);
+
+  // 进入 tile surface 时应用 layout（含越界检查）
+  useEffect(() => {
+    if (surfaceMode !== "tile") return;
+    const layout = noteTileLayoutRef.current;
+    if (!layout) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const monitors = await availableMonitors();
+        const primary = await primaryMonitor();
+        if (cancelled) return;
+        const monitorRects: MonitorRect[] = monitors.map((m) => ({
+          position: { x: m.position.x, y: m.position.y },
+          size: { width: m.size.width, height: m.size.height },
+        }));
+        const primaryRect: MonitorRect | null = primary
+          ? {
+              position: { x: primary.position.x, y: primary.position.y },
+              size: { width: primary.size.width, height: primary.size.height },
+            }
+          : null;
+        const bounds = resolveLayoutBounds(layout, monitorRects, primaryRect);
+        // 折叠态：高 36 强制；宽度走计算的 bounds.width
+        const targetHeight = layout.collapsed ? 36 : bounds.height;
+        await animateCurrentWindowBounds({
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: targetHeight,
+        }).catch(() => undefined);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [surfaceMode, editingNoteId]);
+
   // 切回 pad 时强制退出 tile 编辑模式
   useEffect(() => {
     if (surfaceMode !== "tile") setTileEditing(false);
   }, [surfaceMode]);
 
-  // 进入 tile 编辑模式时聚焦 textarea，光标置末尾
+  // 进入 tile 编辑模式时聚焦 textarea，按 pendingCaretOffset 定位光标（D2）；null 时落末尾
   useEffect(() => {
     if (!tileEditing) return;
     const ta = tileTextareaRef.current;
     if (!ta) return;
     ta.focus();
-    const end = ta.value.length;
-    ta.selectionStart = end;
-    ta.selectionEnd = end;
-  }, [tileEditing]);
+    const target =
+      pendingCaretOffset != null
+        ? Math.max(0, Math.min(ta.value.length, pendingCaretOffset))
+        : ta.value.length;
+    ta.selectionStart = target;
+    ta.selectionEnd = target;
+    setPendingCaretOffset(null);
+  }, [tileEditing, pendingCaretOffset]);
 
   // 点磁贴外部 → 退出 tile 编辑
   useEffect(() => {
@@ -512,10 +662,19 @@ export function NotePad({
     }
   }, [content, t]);
 
-  const openColorPicker = useCallback(() => {
+  // 调色板触发：右键菜单 → adjustColor action 携带坐标 → 打开 popover
+  const openColorPalette = useCallback((x: number, y: number) => {
+    setPaletteState({ open: true, x, y });
+  }, []);
+
+  const closeColorPalette = useCallback(() => {
+    setPaletteState((prev) => ({ ...prev, open: false }));
+  }, []);
+
+  // "自定义颜色…" 入口仍走原生 picker
+  const openNativeColorPicker = useCallback(() => {
     const input = colorPickerRef.current;
     if (!input) return;
-    // 现场计算当前颜色（避免 effectiveTileColor 闭包依赖跨过 useCallback 边界）
     input.value = resolveNoteTileColor(noteTileColor, tileColorMode, tileColorRaw);
     input.click();
   }, [noteTileColor, tileColorMode, tileColorRaw]);
@@ -586,7 +745,11 @@ export function NotePad({
       }
 
       if (action === "adjustColor") {
-        openColorPicker();
+        const { x, y } = surfaceActionContextFromEvent(event);
+        openColorPalette(
+          typeof x === "number" ? x : window.innerWidth / 2,
+          typeof y === "number" ? y : window.innerHeight / 2,
+        );
         return;
       }
 
@@ -597,7 +760,7 @@ export function NotePad({
     return () => {
       window.removeEventListener(NOTE_SURFACE_ACTION_EVENT, handleSurfaceActionRequest);
     };
-  }, [copyTileContent, handleClose, handleSave, openColorPicker, switchSurfaceMode]);
+  }, [copyTileContent, handleClose, handleSave, openColorPalette, switchSurfaceMode]);
 
   useEffect(() => {
     if (!noteSurfaceAutoSave || mode !== "new" || status !== "dirty") {
@@ -618,11 +781,115 @@ export function NotePad({
     void startCurrentWindowDrag().catch(() => undefined);
   };
 
+  // 折叠 / 展开（D6）
+  const toggleCollapse = useCallback(async () => {
+    const wasCollapsed = tileCollapsed;
+    if (!wasCollapsed) {
+      // 折叠前：先记下当前尺寸
+      try {
+        const bounds = await getCurrentWindowBounds();
+        preCollapseSizeRef.current = { width: bounds.width, height: bounds.height };
+      } catch {
+        preCollapseSizeRef.current = null;
+      }
+      setTileCollapsed(true);
+      // 折叠后窗口高度 = 36；宽度 = max(120, 估算标题宽)
+      const estimatedTitleWidth = (title.trim().length || 1) * Math.max(8, surfaceFontSize - 2);
+      const collapsedWidth = Math.max(120, Math.min(280, estimatedTitleWidth + 60));
+      try {
+        const bounds = await getCurrentWindowBounds();
+        await animateCurrentWindowBounds({
+          x: bounds.x,
+          y: bounds.y,
+          width: collapsedWidth,
+          height: 36,
+        }).catch(() => undefined);
+      } catch {
+        /* ignore */
+      }
+      // 标记 layout.collapsed=true（onResized 内的折叠态 guard 会避免污染 width/height）
+      const prev = noteTileLayoutRef.current;
+      if (prev) {
+        const merged = { ...prev, collapsed: true };
+        noteTileLayoutRef.current = merged;
+        setNoteTileLayout(merged);
+      }
+    } else {
+      // 展开：还原到 preCollapseSize
+      const restore = preCollapseSizeRef.current;
+      setTileCollapsed(false);
+      if (restore) {
+        try {
+          const bounds = await getCurrentWindowBounds();
+          await animateCurrentWindowBounds({
+            x: bounds.x,
+            y: bounds.y,
+            width: restore.width,
+            height: restore.height,
+          }).catch(() => undefined);
+        } catch {
+          /* ignore */
+        }
+      }
+      // 标记 layout.collapsed=false
+      const prev = noteTileLayoutRef.current;
+      if (prev) {
+        const merged = { ...prev, collapsed: false };
+        noteTileLayoutRef.current = merged;
+        setNoteTileLayout(merged);
+      }
+    }
+  }, [surfaceFontSize, tileCollapsed, title]);
+
+  // 磁贴专用双击交互层（D1+D6）：标题栏带 = 折叠/展开；正文区 = 进编辑（D2 光标定位）
+  const handleTileDoubleClick = useCallback(
+    (event: { clientX: number; clientY: number; target: EventTarget | null }) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+
+      // 标题栏带命中 → 折叠 / 展开（无论当前是否在编辑）
+      if (target.closest('[data-tile-titlebar="true"]')) {
+        // 编辑态下双击标题栏：先退出编辑，再切换折叠
+        if (tileEditing) setTileEditing(false);
+        void toggleCollapse();
+        return;
+      }
+
+      // 折叠态下正文不可点（实际上正文已 display:none，理论 unreachable）
+      if (tileCollapsed) return;
+
+      // 已在编辑模式：让用户在 textarea 内正常双击（选词），不接管
+      if (tileEditing) return;
+
+      // 计算光标偏移（D2）：找最近的 [data-tile-text-root] 决定 plain / markdown 模式
+      const root = target.closest<HTMLElement>("[data-tile-text-root]");
+      if (root) {
+        const mode = root.dataset.tileTextRoot === "markdown" ? "markdown" : "plain";
+        const offset = getCaretOffset(mode, {
+          root,
+          doc: document,
+          x: event.clientX,
+          y: event.clientY,
+          content,
+        });
+        setPendingCaretOffset(offset);
+      } else {
+        setPendingCaretOffset(null);
+      }
+      setTileEditing(true);
+    },
+    [content, tileCollapsed, tileEditing, toggleCollapse],
+  );
+
+  const tileMouse = useTileDoubleClick({ onDoubleClick: handleTileDoubleClick });
+
   const resetDraft = () => {
     setEditingNoteId(null);
     setTitle("");
     setContent("");
     setNoteTileColor(null);
+    setNoteTileLayout(null);
+    setTileCollapsed(false);
     setMode("new");
     setStatus("empty");
     setErrorMessage(null);
@@ -654,29 +921,16 @@ export function NotePad({
             fontSize={surfaceFontSize}
             renderMarkdown={!tileEditing && !errorMessage && tileRenderMarkdown}
             imageBaseDir={imageBaseDir ?? undefined}
+            collapsed={tileCollapsed}
             width="100%"
             className="h-full cursor-default"
             data-surface-mode={surfaceMode}
             data-context-menu="tile"
             data-note-id={tileNoteId}
-            onMouseDown={handleDrag}
-            onDoubleClick={(event) => {
-              const target = event.target as HTMLElement;
-              if (target.closest("button,a,[data-surface-resize-handle]")) return;
-              if (tileEditing) return;
-              setTileEditing(true);
-            }}
+            onMouseDown={tileMouse.onMouseDown}
           >
-            {tileEditing && (
-              <div className="absolute inset-0 px-4 pt-4 pb-4 z-0">
-                {tileTitle && (
-                  <div
-                    className="font-display tracking-wide mb-3 leading-snug pointer-events-none"
-                    style={{ fontSize: `${surfaceFontSize + 1}px`, opacity: 0.5 }}
-                  >
-                    {tileTitle}
-                  </div>
-                )}
+            {tileEditing && !tileCollapsed && (
+              <div className="absolute inset-0 px-4 pt-10 pb-4 z-0">
                 <textarea
                   ref={tileTextareaRef}
                   data-tab-indent="true"
@@ -703,7 +957,7 @@ export function NotePad({
                       },
                     });
                   }}
-                  className="w-full h-[calc(100%-2rem)] resize-none outline-none bg-transparent leading-[1.8] whitespace-pre-wrap font-body"
+                  className="w-full h-full resize-none outline-none bg-transparent leading-[1.8] whitespace-pre-wrap font-body"
                   style={{
                     fontSize: `${surfaceFontSize}px`,
                     color: "inherit",
@@ -741,6 +995,15 @@ export function NotePad({
             tabIndex={-1}
             className="absolute opacity-0 pointer-events-none w-0 h-0"
             onChange={(event) => handleColorPickerChange(event.target.value)}
+          />
+          <TileColorPalette
+            open={paletteState.open}
+            anchorX={paletteState.x}
+            anchorY={paletteState.y}
+            currentColor={effectiveTileColor}
+            onChange={(hex) => handleColorPickerChange(hex)}
+            onPickCustom={openNativeColorPicker}
+            onClose={closeColorPalette}
           />
         </div>
       ) : (
