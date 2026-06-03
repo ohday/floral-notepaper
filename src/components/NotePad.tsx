@@ -26,11 +26,11 @@ import {
 } from "../features/windows/controls";
 import { openNoteInEditor } from "../features/windows/api";
 import type { ResizeDirection } from "../features/windows/controls";
-import { getConfig } from "../features/settings/api";
+import { getConfig, saveConfig } from "../features/settings/api";
 import {
   DEFAULT_TILE_COLOR,
   normalizeTileColor,
-  resolveTileColor,
+  resolveNoteTileColor,
 } from "../features/settings/tileColor";
 import type { TileColorMode } from "../features/settings/types";
 import { shouldSaveBeforeSwitchingToTile } from "../features/windows/noteSurfaceSavePolicy";
@@ -48,6 +48,7 @@ import {
   emitTileWindowUnpinned,
   tileSurfaceModeUnpinNoteId,
 } from "../features/windows/tileWindowEvents";
+import { handleMarkdownEnter } from "../features/markdown/useMarkdownAutoComplete";
 import { Tile } from "./Tile";
 
 type OpenMode = "new" | "open";
@@ -128,9 +129,14 @@ export function NotePad({
   const [tileColorMode, setTileColorMode] = useState<TileColorMode>("system");
   const [surfaceFontSize, setSurfaceFontSize] = useState(14);
   const [tileRenderMarkdown, setTileRenderMarkdown] = useState(false);
-  const [tileColor, setTileColor] = useState(() =>
-    resolveTileColor("system", normalizeTileColor(initialTileColor)),
-  );
+  // 当前打开笔记自带的 tileColor（per-note，最高优先级）；null 表示笔记未自定义
+  const [noteTileColor, setNoteTileColor] = useState<string | null>(null);
+  const [tileEditing, setTileEditing] = useState(false);
+  const [systemThemeNonce, setSystemThemeNonce] = useState(0);
+  const tileRootRef = useRef<HTMLDivElement>(null);
+  const tileTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const colorPickerRef = useRef<HTMLInputElement>(null);
+  const colorPersistTimerRef = useRef<number | null>(null);
   const [isExiting, setIsExiting] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLTextAreaElement>(null);
@@ -169,6 +175,7 @@ export function NotePad({
     setEditingNoteId(note.id);
     setTitle(note.title);
     setContent(note.content);
+    setNoteTileColor(note.tileColor ?? null);
     setMode("new");
     setStatus("opened");
   }, []);
@@ -185,9 +192,6 @@ export function NotePad({
           setTileRenderMarkdown(loadedConfig.tileRenderMarkdown ?? false);
           setTileColorRaw(normalizeTileColor(loadedConfig.tileColor));
           setTileColorMode(loadedConfig.tileColorMode ?? "system");
-          setTileColor(
-            resolveTileColor(loadedConfig.tileColorMode ?? "system", loadedConfig.tileColor),
-          );
         }
         if (initialNoteId) {
           const note = await getNote(initialNoteId);
@@ -207,11 +211,17 @@ export function NotePad({
   useEffect(() => {
     const unlisten = listen("notes-changed", () => {
       void refreshNotes().catch(() => undefined);
+      // 同步刷新当前打开笔记的 tileColor（其他窗口可能改了色）
+      if (editingNoteId) {
+        void getNote(editingNoteId)
+          .then((note) => setNoteTileColor(note.tileColor ?? null))
+          .catch(() => undefined);
+      }
     });
     return () => {
       void unlisten.then((fn) => fn());
     };
-  }, [refreshNotes]);
+  }, [editingNoteId, refreshNotes]);
 
   useEffect(() => {
     if (isStandby.current) return;
@@ -242,7 +252,6 @@ export function NotePad({
       const raw = event.payload.tileColor ?? tileColorRaw;
       setTileColorMode(mode);
       setTileColorRaw(normalizeTileColor(raw));
-      setTileColor(resolveTileColor(mode, raw));
       if (event.payload.surfaceFontSize != null) setSurfaceFontSize(event.payload.surfaceFontSize);
       if (event.payload.tileRenderMarkdown != null)
         setTileRenderMarkdown(event.payload.tileRenderMarkdown);
@@ -255,14 +264,14 @@ export function NotePad({
   useEffect(() => {
     if (tileColorMode !== "system") return;
     const observer = new MutationObserver(() => {
-      setTileColor(resolveTileColor("system", tileColorRaw));
+      setSystemThemeNonce((n) => n + 1);
     });
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["data-theme"],
     });
     return () => observer.disconnect();
-  }, [tileColorMode, tileColorRaw]);
+  }, [tileColorMode]);
 
   useEffect(() => {
     let myLabel = "";
@@ -280,6 +289,7 @@ export function NotePad({
       setEditingNoteId(null);
       setTitle("");
       setContent("");
+      setNoteTileColor(null);
       setMode("new");
       setStatus("empty");
       setErrorMessage(null);
@@ -297,12 +307,18 @@ export function NotePad({
 
   const saveNote = useCallback(async () => {
     const existingCategory = notes.find((n) => n.id === editingNoteId)?.category ?? "";
-    const request = { title, content, category: existingCategory };
+    const request = {
+      title,
+      content,
+      category: existingCategory,
+      tileColor: noteTileColor ?? undefined,
+    };
     const note = editingNoteId
       ? await updateNote(editingNoteId, request)
       : await createNote(request);
 
     setEditingNoteId(note.id);
+    setNoteTileColor(note.tileColor ?? null);
     setNotes((current) => {
       const metadata = metadataFromNote(note);
       const exists = current.some((item) => item.id === note.id);
@@ -313,7 +329,7 @@ export function NotePad({
     });
     setStatus("saved");
     return note;
-  }, [content, editingNoteId, title]);
+  }, [content, editingNoteId, notes, noteTileColor, title]);
 
   const hasDraftContent = useCallback(
     () => Boolean(editingNoteId || title.trim() || content.trim()),
@@ -388,6 +404,46 @@ export function NotePad({
     void setCurrentWindowAlwaysOnTop(true).catch(() => undefined);
   }, [surfaceMode]);
 
+  // 切回 pad 时强制退出 tile 编辑模式
+  useEffect(() => {
+    if (surfaceMode !== "tile") setTileEditing(false);
+  }, [surfaceMode]);
+
+  // 进入 tile 编辑模式时聚焦 textarea，光标置末尾
+  useEffect(() => {
+    if (!tileEditing) return;
+    const ta = tileTextareaRef.current;
+    if (!ta) return;
+    ta.focus();
+    const end = ta.value.length;
+    ta.selectionStart = end;
+    ta.selectionEnd = end;
+  }, [tileEditing]);
+
+  // 点磁贴外部 → 退出 tile 编辑
+  useEffect(() => {
+    if (!tileEditing) return;
+    function onPointerDown(event: PointerEvent) {
+      const root = tileRootRef.current;
+      if (!root) return;
+      const target = event.target as Node | null;
+      if (target && root.contains(target)) return;
+      setTileEditing(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [tileEditing]);
+
+  // 卸载时清理颜色持久化定时器
+  useEffect(() => {
+    return () => {
+      if (colorPersistTimerRef.current != null) {
+        window.clearTimeout(colorPersistTimerRef.current);
+        colorPersistTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const handleSave = useCallback(async () => {
     setErrorMessage(null);
     try {
@@ -456,6 +512,59 @@ export function NotePad({
     }
   }, [content, t]);
 
+  const openColorPicker = useCallback(() => {
+    const input = colorPickerRef.current;
+    if (!input) return;
+    // 现场计算当前颜色（避免 effectiveTileColor 闭包依赖跨过 useCallback 边界）
+    input.value = resolveNoteTileColor(noteTileColor, tileColorMode, tileColorRaw);
+    input.click();
+  }, [noteTileColor, tileColorMode, tileColorRaw]);
+
+  const persistTileColor = useCallback(
+    (nextColor: string) => {
+      const normalized = normalizeTileColor(nextColor);
+      // 写笔记自身（如已保存过）
+      if (editingNoteId) {
+        const existingCategory = notes.find((n) => n.id === editingNoteId)?.category ?? "";
+        void updateNote(editingNoteId, {
+          title,
+          content,
+          category: existingCategory,
+          tileColor: normalized,
+        }).catch((error) => setErrorMessage(getErrorMessage(error)));
+      }
+      // 同步写 config 作为"最后调过的色"——仅当 mode 已经是 custom 时；system 模式下不强制切换
+      void getConfig()
+        .then((cfg) =>
+          saveConfig({
+            ...cfg,
+            tileColor: normalized,
+            tileColorMode: cfg.tileColorMode === "system" ? "system" : "custom",
+          }),
+        )
+        .catch(() => undefined);
+    },
+    [content, editingNoteId, notes, title],
+  );
+
+  const handleColorPickerChange = useCallback(
+    (next: string) => {
+      const normalized = normalizeTileColor(next);
+      // 立即视觉反馈：更新 noteTileColor，effectiveTileColor 重算
+      setNoteTileColor(normalized);
+      // 同时更新 config 级 tileColorRaw，保证不依赖此 note 的渲染（如新磁贴）也跟上
+      setTileColorRaw(normalized);
+      // 防抖持久化
+      if (colorPersistTimerRef.current != null) {
+        window.clearTimeout(colorPersistTimerRef.current);
+      }
+      colorPersistTimerRef.current = window.setTimeout(() => {
+        persistTileColor(normalized);
+      }, 300);
+    },
+    [persistTileColor],
+  );
+
   useEffect(() => {
     function handleSurfaceActionRequest(event: Event) {
       const action = surfaceActionFromEvent(event);
@@ -476,6 +585,11 @@ export function NotePad({
         return;
       }
 
+      if (action === "adjustColor") {
+        openColorPicker();
+        return;
+      }
+
       void switchSurfaceMode("pad");
     }
 
@@ -483,7 +597,7 @@ export function NotePad({
     return () => {
       window.removeEventListener(NOTE_SURFACE_ACTION_EVENT, handleSurfaceActionRequest);
     };
-  }, [copyTileContent, handleClose, handleSave, switchSurfaceMode]);
+  }, [copyTileContent, handleClose, handleSave, openColorPicker, switchSurfaceMode]);
 
   useEffect(() => {
     if (!noteSurfaceAutoSave || mode !== "new" || status !== "dirty") {
@@ -508,6 +622,7 @@ export function NotePad({
     setEditingNoteId(null);
     setTitle("");
     setContent("");
+    setNoteTileColor(null);
     setMode("new");
     setStatus("empty");
     setErrorMessage(null);
@@ -520,45 +635,114 @@ export function NotePad({
   const padSurfaceClassName =
     "app-surface-frame relative noise-bg w-full h-full min-h-0 bg-cloud overflow-hidden flex flex-col flex-1 border border-paper-deep/70 shadow-[0_1px_10px_rgba(26,26,24,0.06)] transition-all duration-200 ease-out";
 
+  // 磁贴最终颜色：note.tileColor → config.tileColor → DEFAULT（D4 三段回退）
+  // systemThemeNonce 仅用于在 dark/light 主题切换时触发重算
+  const effectiveTileColor = useMemo(
+    () => resolveNoteTileColor(noteTileColor, tileColorMode, tileColorRaw),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [noteTileColor, tileColorMode, tileColorRaw, systemThemeNonce],
+  );
+
   return (
     <div className={surfaceWrapperClassName}>
       {isTile ? (
-        <Tile
-          title={tileTitle || undefined}
-          content={errorMessage || content}
-          color={tileColor}
-          fontSize={surfaceFontSize}
-          renderMarkdown={!errorMessage && tileRenderMarkdown}
-          imageBaseDir={imageBaseDir ?? undefined}
-          width="100%"
-          className="h-full cursor-default"
-          data-surface-mode={surfaceMode}
-          data-context-menu="tile"
-          data-note-id={tileNoteId}
-          onMouseDown={handleDrag}
-        >
-          <button
-            type="button"
-            aria-label="取消钉屏"
-            title="取消钉屏"
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={() => void handleClose()}
-            className="absolute top-2 right-2 z-10 w-6 h-6 flex items-center justify-center rounded-full text-ink-ghost/70 hover:text-red-400 hover:bg-danger-bg/80 transition-colors cursor-pointer"
+        <div ref={tileRootRef} className="w-full h-full">
+          <Tile
+            title={tileTitle || undefined}
+            content={tileEditing ? "" : errorMessage || content}
+            color={effectiveTileColor}
+            fontSize={surfaceFontSize}
+            renderMarkdown={!tileEditing && !errorMessage && tileRenderMarkdown}
+            imageBaseDir={imageBaseDir ?? undefined}
+            width="100%"
+            className="h-full cursor-default"
+            data-surface-mode={surfaceMode}
+            data-context-menu="tile"
+            data-note-id={tileNoteId}
+            onMouseDown={handleDrag}
+            onDoubleClick={(event) => {
+              const target = event.target as HTMLElement;
+              if (target.closest("button,a,[data-surface-resize-handle]")) return;
+              if (tileEditing) return;
+              setTileEditing(true);
+            }}
           >
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
+            {tileEditing && (
+              <div className="absolute inset-0 px-4 pt-4 pb-4 z-0">
+                {tileTitle && (
+                  <div
+                    className="font-display tracking-wide mb-3 leading-snug pointer-events-none"
+                    style={{ fontSize: `${surfaceFontSize + 1}px`, opacity: 0.5 }}
+                  >
+                    {tileTitle}
+                  </div>
+                )}
+                <textarea
+                  ref={tileTextareaRef}
+                  data-tab-indent="true"
+                  value={content}
+                  onChange={(event) => {
+                    setContent(event.target.value);
+                    setStatus("dirty");
+                  }}
+                  onPaste={imagePasteHandler}
+                  onDrop={imageDropHandler}
+                  onDragOver={imageDragOverHandler}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setTileEditing(false);
+                      return;
+                    }
+                    handleMarkdownEnter(event, {
+                      value: content,
+                      setValue: (next) => {
+                        setContent(next);
+                        setStatus("dirty");
+                      },
+                    });
+                  }}
+                  className="w-full h-[calc(100%-2rem)] resize-none outline-none bg-transparent leading-[1.8] whitespace-pre-wrap font-body"
+                  style={{
+                    fontSize: `${surfaceFontSize}px`,
+                    color: "inherit",
+                    tabSize: `var(--tab-indent-size, 2)`,
+                  }}
+                />
+              </div>
+            )}
+            <button
+              type="button"
+              aria-label="取消钉屏"
+              title="取消钉屏"
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={() => void handleClose()}
+              className="absolute top-2 right-2 z-10 w-6 h-6 flex items-center justify-center rounded-full text-ink-ghost/70 hover:text-red-400 hover:bg-danger-bg/80 transition-colors cursor-pointer"
             >
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          </button>
-          <SurfaceResizeHandles />
-        </Tile>
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+              >
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+            <SurfaceResizeHandles />
+          </Tile>
+          <input
+            ref={colorPickerRef}
+            type="color"
+            aria-hidden="true"
+            tabIndex={-1}
+            className="absolute opacity-0 pointer-events-none w-0 h-0"
+            onChange={(event) => handleColorPickerChange(event.target.value)}
+          />
+        </div>
       ) : (
         <div className={padSurfaceClassName} data-surface-mode={surfaceMode}>
           <>
@@ -674,6 +858,17 @@ export function NotePad({
                   onDrop={imageDropHandler}
                   onDragOver={imageDragOverHandler}
                   onKeyDown={(event) => {
+                    if (
+                      handleMarkdownEnter(event, {
+                        value: content,
+                        setValue: (next) => {
+                          setContent(next);
+                          setStatus("dirty");
+                        },
+                      })
+                    ) {
+                      return;
+                    }
                     if (event.key === "ArrowUp") {
                       const ta = contentRef.current;
                       if (ta && ta.selectionStart === ta.selectionEnd) {
