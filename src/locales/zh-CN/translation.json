@@ -22,6 +22,7 @@
       "selectAll": "全选"
     },
     "tile": {
+      "adjustColor": "调整颜色…",
       "close": "取消钉屏",
       "copy": "复制",
       "save": "保存",

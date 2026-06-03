@@ -22,6 +22,7 @@
       "selectAll": "Select All"
     },
     "tile": {
+      "adjustColor": "Adjust Color…",
       "close": "Unpin",
       "copy": "Copy",
       "save": "Save",

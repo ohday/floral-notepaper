@@ -18,6 +18,10 @@ export function getTileContextMenuItems(translate: TFunction = t): TileContextMe
       label: translate("contextMenu.tile.save", { defaultValue: "保存" }),
     },
     {
+      action: "adjustColor",
+      label: translate("contextMenu.tile.adjustColor", { defaultValue: "调整颜色…" }),
+    },
+    {
       action: "switchToPad",
       label: translate("contextMenu.tile.switchToPad", { defaultValue: "转为小窗" }),
     },

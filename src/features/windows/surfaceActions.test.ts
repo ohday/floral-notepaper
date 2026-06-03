@@ -12,6 +12,7 @@ describe("note surface actions", () => {
     expect(isNoteSurfaceAction("save")).toBe(true);
     expect(isNoteSurfaceAction("switchToPad")).toBe(true);
     expect(isNoteSurfaceAction("close")).toBe(true);
+    expect(isNoteSurfaceAction("adjustColor")).toBe(true);
     expect(isNoteSurfaceAction("delete")).toBe(false);
   });
 
