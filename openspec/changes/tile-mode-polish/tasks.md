@@ -84,7 +84,7 @@
 
 ## 11. 提交与推送
 
-- [ ] 11.1 创建分支 `feat/tile-mode-polish`（基于 `feat/tile-mode-optimizations` 之后的 main）
-- [ ] 11.2 按 1-7 边界分组 commit（11 步：颜色 / 调色板常量 / palette 组件 / 双击 hook / 光标定位 / 折叠 / 后端 schema / 前端类型 / 监听器 / openspec / 文档）
-- [ ] 11.3 `git push -u origin feat/tile-mode-polish`
-- [ ] 11.4 PR 链接返回给用户
+- [x] 11.1 创建分支 `feat/tile-mode-polish`（基于 `feat/tile-mode-optimizations` 之后的 main）
+- [x] 11.2 按 1-7 边界分组 commit（11 步：颜色 / 调色板常量 / palette 组件 / 双击 hook / 光标定位 / 折叠 / 后端 schema / 前端类型 / 监听器 / openspec / 文档）
+- [x] 11.3 `git push -u origin feat/tile-mode-polish`
+- [x] 11.4 PR 链接返回给用户
