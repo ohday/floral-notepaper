@@ -515,3 +515,15 @@ input::placeholder {
   font-size: 0.85em;
   font-family: var(--font-mono);
 }
+
+/* 磁贴里 Markdown 图片"边到边铺满"，覆盖默认 w-[50%] mx-auto（仅在 .tile-md 作用域内） */
+.tile-md img {
+  width: calc(100% + 2rem);
+  margin-left: -1rem;
+  margin-right: -1rem;
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  border-radius: 0;
+  display: block;
+  max-width: none;
+}

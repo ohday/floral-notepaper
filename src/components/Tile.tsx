@@ -90,7 +90,7 @@ export function Tile({
     return {
       borderColor: chroma.mix(tileColor, mixTarget, 0.18).alpha(0.55).css(),
       cornerColor: chroma.mix(tileColor, mixTarget, 0.3).alpha(0.26).css(),
-      titleColor: chroma.mix(tileColor, mixTarget, 0.4).alpha(0.5).css(),
+      titleColor: chroma.mix(tileColor, mixTarget, 0.6).alpha(0.85).css(),
       contentColor: chroma.mix(tileColor, mixTarget, 0.65).alpha(0.85).css(),
       emptyColor: chroma.mix(tileColor, mixTarget, 0.25).alpha(0.4).css(),
     };
@@ -121,7 +121,7 @@ export function Tile({
         )}
         {content ? (
           renderMarkdown ? (
-            <div style={{ color: contentColor }}>
+            <div className="tile-md" style={{ color: contentColor }}>
               <MarkdownPreview
                 content={content}
                 fontSize={fontSize}
