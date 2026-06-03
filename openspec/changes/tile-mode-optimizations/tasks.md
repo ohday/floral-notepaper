@@ -61,8 +61,8 @@
 
 ## 10. 提交与推送
 
-- [ ] 10.1 `git config user.name ohday`、`git config user.email ohday@163.com`（仅本仓库）
-- [ ] 10.2 `git remote set-url origin https://github.com/ohday/floral-notepaper.git`
-- [ ] 10.3 `git checkout -b feat/tile-mode-optimizations`
-- [ ] 10.4 分组 commit（按上述 1-8 的边界）
-- [ ] 10.5 `git push -u origin feat/tile-mode-optimizations`
+- [x] 10.1 `git config user.name ohday`、`git config user.email ohday@163.com`（仅本仓库）
+- [x] 10.2 `git remote set-url origin https://github.com/ohday/floral-notepaper.git`
+- [x] 10.3 `git checkout -b feat/tile-mode-optimizations`
+- [x] 10.4 分组 commit（按上述 1-8 的边界）
+- [x] 10.5 `git push -u origin feat/tile-mode-optimizations`
