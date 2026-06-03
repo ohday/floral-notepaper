@@ -82,6 +82,17 @@ pub struct AppConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct TileLayout {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveNoteRequest {
     pub title: String,
     pub content: String,
@@ -89,6 +100,8 @@ pub struct SaveNoteRequest {
     pub category: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tile_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_layout: Option<TileLayout>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -105,6 +118,8 @@ pub struct NoteMetadata {
     pub preview: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tile_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_layout: Option<TileLayout>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -121,6 +136,8 @@ pub struct Note {
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tile_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_layout: Option<TileLayout>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -381,6 +398,7 @@ impl NoteStore {
             word_count: metadata.word_count,
             content,
             tile_color: metadata.tile_color,
+            tile_layout: metadata.tile_layout,
         })
     }
 
@@ -392,6 +410,7 @@ impl NoteStore {
         let word_count = count_words(&request.content);
         let category = request.category.clone();
         let tile_color = request.tile_color.clone();
+        let tile_layout = request.tile_layout.clone();
         let note_path = self.note_path_in_category(&file_name, &category);
         if let Some(parent) = note_path.parent() {
             fs::create_dir_all(parent)?;
@@ -406,6 +425,7 @@ impl NoteStore {
             word_count,
             preview: preview(&request.content),
             tile_color: tile_color.clone(),
+            tile_layout: tile_layout.clone(),
         };
 
         fs::write(&note_path, &request.content)?;
@@ -423,6 +443,7 @@ impl NoteStore {
             word_count,
             content: request.content,
             tile_color,
+            tile_layout,
         })
     }
 
@@ -465,6 +486,9 @@ impl NoteStore {
         if let Some(color) = request.tile_color.clone() {
             note.tile_color = Some(color);
         }
+        if let Some(layout) = request.tile_layout.clone() {
+            note.tile_layout = Some(layout);
+        }
 
         let result = Note {
             id: note.id.clone(),
@@ -476,6 +500,7 @@ impl NoteStore {
             word_count: note.word_count,
             content: request.content,
             tile_color: note.tile_color.clone(),
+            tile_layout: note.tile_layout.clone(),
         };
 
         self.save_metadata(&metadata_file)?;
@@ -587,6 +612,7 @@ impl NoteStore {
             content,
             category: category.to_string(),
             tile_color: None,
+            tile_layout: None,
         })
     }
 
@@ -951,6 +977,7 @@ impl NoteStore {
                 word_count: count_words(&content),
                 preview: preview(&content),
                 tile_color: None,
+                tile_layout: None,
             });
         }
         Ok(())

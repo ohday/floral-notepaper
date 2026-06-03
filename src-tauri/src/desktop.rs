@@ -1251,6 +1251,10 @@ pub fn recycle_notepad_window(app: &AppHandle, label: &str) -> Result<(), AppErr
 }
 
 fn save_surface_size(window: &tauri::WebviewWindow) {
+    // tile- 开头的窗口尺寸不写全局 AppConfig；改由前端写到 note.tile_layout（D5 语义调整）
+    if window.label().starts_with("tile-") {
+        return;
+    }
     let Ok(store) = default_store() else {
         return;
     };
