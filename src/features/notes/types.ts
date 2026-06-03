@@ -7,6 +7,7 @@ export interface NoteMetadata {
   updatedAt: string;
   wordCount: number;
   preview: string;
+  tileColor?: string;
 }
 
 export interface Note extends Omit<NoteMetadata, "preview"> {
@@ -17,6 +18,7 @@ export interface SaveNoteRequest {
   title: string;
   content: string;
   category: string;
+  tileColor?: string;
 }
 
 export interface ExternalFile {

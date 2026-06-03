@@ -35,3 +35,19 @@ export function resolveSystemTileColor(): string {
 export function resolveTileColor(mode: TileColorMode, customColor: string): string {
   return mode === "system" ? resolveSystemTileColor() : normalizeTileColor(customColor);
 }
+
+/**
+ * 三段回退：note.tileColor → config 级颜色 → DEFAULT_TILE_COLOR。
+ * 用于磁贴渲染时决定最终颜色（D4）。
+ */
+export function resolveNoteTileColor(
+  noteTileColor: string | null | undefined,
+  configMode: TileColorMode,
+  configTileColor: string,
+): string {
+  const trimmed = noteTileColor?.trim();
+  if (trimmed && (FULL_HEX_COLOR.test(trimmed) || SHORT_HEX_COLOR.test(trimmed))) {
+    return normalizeTileColor(trimmed);
+  }
+  return resolveTileColor(configMode, configTileColor);
+}
