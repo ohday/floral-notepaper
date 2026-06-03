@@ -12,6 +12,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Components } from "react-markdown";
 import "katex/dist/katex.min.css";
+import { rehypeMdLineStart } from "./rehypeMdLineStart";
 
 function CodeBlock({ children, language }: { children: React.ReactNode; language?: string }) {
   const { t } = useTranslation();
@@ -66,6 +67,8 @@ interface MarkdownPreviewProps {
   fontSize?: number;
   renderHtml?: boolean;
   imageBaseDir?: string;
+  /** 给 block-level 节点挂 data-md-line-start，用于磁贴双击进编辑光标定位（D2） */
+  markLines?: boolean;
 }
 
 const remarkPlugins = [remarkGfm, remarkMath];
@@ -203,6 +206,7 @@ export function MarkdownPreview({
   fontSize = 14,
   renderHtml = false,
   imageBaseDir,
+  markLines = false,
 }: MarkdownPreviewProps) {
   const { t } = useTranslation();
   const components = useMemo<Components>(
@@ -226,12 +230,17 @@ export function MarkdownPreview({
     }),
     [imageBaseDir],
   );
+  const rehypePlugins = useMemo<Pluggable[]>(() => {
+    const base: Pluggable[] = renderHtml ? [...rehypePluginsWithHtml] : [...rehypePluginsDefault];
+    if (markLines) base.push(rehypeMdLineStart);
+    return base;
+  }, [markLines, renderHtml]);
   return (
     <div className="font-body" style={{ fontSize: `${fontSize}px` }}>
       {content.trim() ? (
         <Markdown
           remarkPlugins={remarkPlugins}
-          rehypePlugins={renderHtml ? rehypePluginsWithHtml : rehypePluginsDefault}
+          rehypePlugins={rehypePlugins}
           components={components}
         >
           {content}
