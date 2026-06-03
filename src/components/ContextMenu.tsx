@@ -168,7 +168,7 @@ export function ContextMenuProvider({ children }: { children: React.ReactNode })
   };
 
   const runSurfaceAction = (action: (typeof tileContextMenuItems)[number]["action"]) => {
-    requestSurfaceAction(action);
+    requestSurfaceAction(action, menu ? { x: menu.x, y: menu.y } : undefined);
     dismissMenu();
   };
 
