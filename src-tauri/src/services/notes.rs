@@ -80,13 +80,15 @@ pub struct AppConfig {
     pub open_at_cursor: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveNoteRequest {
     pub title: String,
     pub content: String,
     #[serde(default)]
     pub category: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_color: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -101,6 +103,8 @@ pub struct NoteMetadata {
     pub updated_at: DateTime<Utc>,
     pub word_count: usize,
     pub preview: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_color: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -115,6 +119,8 @@ pub struct Note {
     pub updated_at: DateTime<Utc>,
     pub word_count: usize,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_color: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -374,6 +380,7 @@ impl NoteStore {
             updated_at: metadata.updated_at,
             word_count: metadata.word_count,
             content,
+            tile_color: metadata.tile_color,
         })
     }
 
@@ -384,6 +391,7 @@ impl NoteStore {
         let file_name = self.file_name_for(&id, &request.title);
         let word_count = count_words(&request.content);
         let category = request.category.clone();
+        let tile_color = request.tile_color.clone();
         let note_path = self.note_path_in_category(&file_name, &category);
         if let Some(parent) = note_path.parent() {
             fs::create_dir_all(parent)?;
@@ -397,6 +405,7 @@ impl NoteStore {
             updated_at: now,
             word_count,
             preview: preview(&request.content),
+            tile_color: tile_color.clone(),
         };
 
         fs::write(&note_path, &request.content)?;
@@ -413,6 +422,7 @@ impl NoteStore {
             updated_at: now,
             word_count,
             content: request.content,
+            tile_color,
         })
     }
 
@@ -452,6 +462,9 @@ impl NoteStore {
         note.updated_at = now;
         note.word_count = word_count;
         note.preview = preview(&request.content);
+        if let Some(color) = request.tile_color.clone() {
+            note.tile_color = Some(color);
+        }
 
         let result = Note {
             id: note.id.clone(),
@@ -462,6 +475,7 @@ impl NoteStore {
             updated_at: note.updated_at,
             word_count: note.word_count,
             content: request.content,
+            tile_color: note.tile_color.clone(),
         };
 
         self.save_metadata(&metadata_file)?;
@@ -572,6 +586,7 @@ impl NoteStore {
             title,
             content,
             category: category.to_string(),
+            tile_color: None,
         })
     }
 
@@ -935,6 +950,7 @@ impl NoteStore {
                 updated_at: modified,
                 word_count: count_words(&content),
                 preview: preview(&content),
+                tile_color: None,
             });
         }
         Ok(())
@@ -1158,6 +1174,7 @@ mod tests {
                 title: "A/B:Test".into(),
                 content: "hello\nworld".into(),
                 category: String::new(),
+                ..Default::default()
             })
             .expect("create note");
 
@@ -1182,6 +1199,7 @@ mod tests {
                     title: "".into(),
                     content: "# 新标题\nsecond line".into(),
                     category: String::new(),
+                    ..Default::default()
                 },
             )
             .expect("update note");
@@ -1203,6 +1221,7 @@ mod tests {
                 title: "第一条".into(),
                 content: "# 第一条\n正文".into(),
                 category: String::new(),
+                ..Default::default()
             })
             .expect("create first");
         let second = store
@@ -1210,6 +1229,7 @@ mod tests {
                 title: "第二条".into(),
                 content: "第二条正文".into(),
                 category: String::new(),
+                ..Default::default()
             })
             .expect("create second");
 
@@ -1464,6 +1484,7 @@ mod tests {
                 title: "导出标题".into(),
                 content: content.into(),
                 category: String::new(),
+                ..Default::default()
             })
             .expect("create note");
         let export_path = root.join("exports").join("导出.md");
