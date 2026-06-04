@@ -570,18 +570,37 @@ export function NotePad({
     setPendingCaretOffset(null);
   }, [tileEditing, pendingCaretOffset]);
 
-  // 点磁贴外部 → 退出 tile 编辑
+  // 退出 tile 编辑：监听窗口失焦（用户点磁贴所在 OS 窗口外都会失焦）。
+  // 注：document.pointerdown 只能捕获 webview 内的点击，无法响应"点桌面其他地方"。
+  // 同时保留 webview 内"点磁贴外部"分支（虽然磁贴几乎占满 webview，但更广义安全）。
   useEffect(() => {
     if (!tileEditing) return;
+
+    let unlistenFocus: (() => void) | null = null;
+    void getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (!focused) setTileEditing(false);
+      })
+      .then((un) => {
+        unlistenFocus = un;
+      })
+      .catch(() => undefined);
+
     function onPointerDown(event: PointerEvent) {
       const root = tileRootRef.current;
       if (!root) return;
       const target = event.target as Node | null;
       if (target && root.contains(target)) return;
+      // 调色板里点击不算外部
+      if (target instanceof HTMLElement && target.closest('[data-tile-palette="true"]')) return;
       setTileEditing(false);
     }
     document.addEventListener("pointerdown", onPointerDown, true);
-    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      unlistenFocus?.();
+    };
   }, [tileEditing]);
 
   // 卸载时清理颜色持久化定时器
@@ -793,9 +812,11 @@ export function NotePad({
         preCollapseSizeRef.current = null;
       }
       setTileCollapsed(true);
-      // 折叠后窗口高度 = 36；宽度 = max(120, 估算标题宽)
-      const estimatedTitleWidth = (title.trim().length || 1) * Math.max(8, surfaceFontSize - 2);
-      const collapsedWidth = Math.max(120, Math.min(280, estimatedTitleWidth + 60));
+      // 折叠后窗口高度 = 36；宽度需容纳标题 + 3 个按钮（24*3 + gap 8 = 80）+ 左右 padding
+      // 估算字符宽度（按 fontSize-2 像素 / 字），上限 320 让长标题也能看清
+      const titleLen = title.trim().length;
+      const titleWidth = Math.min(titleLen * Math.max(8, surfaceFontSize - 2), 220);
+      const collapsedWidth = Math.max(160, titleWidth + 100);
       try {
         const bounds = await getCurrentWindowBounds();
         await animateCurrentWindowBounds({
@@ -966,26 +987,80 @@ export function NotePad({
                 />
               </div>
             )}
-            <button
-              type="button"
-              aria-label="取消钉屏"
-              title="取消钉屏"
+            <div
+              className="absolute top-0 right-0 z-10 h-8 flex items-center pr-2 gap-1"
+              data-tile-titlebar="false"
               onMouseDown={(event) => event.stopPropagation()}
-              onClick={() => void handleClose()}
-              className="absolute top-2 right-2 z-10 w-6 h-6 flex items-center justify-center rounded-full text-ink-ghost/70 hover:text-red-400 hover:bg-danger-bg/80 transition-colors cursor-pointer"
             >
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
+              <button
+                type="button"
+                aria-label={t("contextMenu.tile.adjustColor", { defaultValue: "调整颜色…" })}
+                title={t("contextMenu.tile.adjustColor", { defaultValue: "调整颜色…" })}
+                onClick={(event) => {
+                  // 锚定在按钮位置（屏幕坐标），打开调色板
+                  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+                  openColorPalette(rect.left, rect.bottom + 4);
+                }}
+                className="w-6 h-6 flex items-center justify-center rounded-full text-ink-ghost/70 hover:text-bamboo hover:bg-bamboo-mist/60 transition-colors cursor-pointer"
               >
-                <path d="M18 6L6 18M6 6l12 12" />
-              </svg>
-            </button>
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <circle cx="13.5" cy="6.5" r="0.5" fill="currentColor" />
+                  <circle cx="17.5" cy="10.5" r="0.5" fill="currentColor" />
+                  <circle cx="8.5" cy="7.5" r="0.5" fill="currentColor" />
+                  <circle cx="6.5" cy="12.5" r="0.5" fill="currentColor" />
+                  <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125 0-.937.75-1.687 1.688-1.687h1.984c3.094 0 5.555-2.461 5.555-5.555C22 6.5 17.5 2 12 2z" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                aria-label={t("contextMenu.tile.switchToPad", { defaultValue: "转为小窗" })}
+                title={t("contextMenu.tile.switchToPad", { defaultValue: "转为小窗" })}
+                onClick={() => void switchSurfaceMode("pad")}
+                className="w-6 h-6 flex items-center justify-center rounded-full text-ink-ghost/70 hover:text-bamboo hover:bg-bamboo-mist/60 transition-colors cursor-pointer"
+              >
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <path d="M3 9h18" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                aria-label={t("contextMenu.tile.close", { defaultValue: "取消钉屏" })}
+                title={t("contextMenu.tile.close", { defaultValue: "取消钉屏" })}
+                onClick={() => void handleClose()}
+                className="w-6 h-6 flex items-center justify-center rounded-full text-ink-ghost/70 hover:text-red-400 hover:bg-danger-bg/80 transition-colors cursor-pointer"
+              >
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                >
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
             <SurfaceResizeHandles />
           </Tile>
           <input

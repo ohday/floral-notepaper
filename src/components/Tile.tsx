@@ -120,7 +120,7 @@ export function Tile({
       >
         {title && (
           <div
-            className="font-display tracking-wide leading-snug truncate pr-8 pointer-events-none"
+            className="font-display tracking-wide leading-snug truncate pr-24 pointer-events-none"
             style={{ color: titleColor, fontSize: `${fontSize + 1}px` }}
           >
             {title}
