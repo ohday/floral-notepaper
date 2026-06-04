@@ -812,11 +812,14 @@ export function NotePad({
         preCollapseSizeRef.current = null;
       }
       setTileCollapsed(true);
-      // 折叠后窗口高度 = 36；宽度需容纳标题 + 3 个按钮（24*3 + gap 8 = 80）+ 左右 padding
-      // 估算字符宽度（按 fontSize-2 像素 / 字），上限 320 让长标题也能看清
+      // 折叠后窗口高度 = 36；宽度需容纳标题 + 3 个按钮组（≈ 88px）+ 左右 padding
+      // 对中文字符更宽容：每字按 fontSize+1 估算（比英文略宽，给 ellipsis 留余量）
       const titleLen = title.trim().length;
-      const titleWidth = Math.min(titleLen * Math.max(8, surfaceFontSize - 2), 220);
-      const collapsedWidth = Math.max(160, titleWidth + 100);
+      const titleWidth = Math.min(titleLen * (surfaceFontSize + 1) + 24, 280);
+      const buttonsAndPadding = 110;
+      const FLOOR = 220;
+      const CEILING = 420;
+      const collapsedWidth = Math.max(FLOOR, Math.min(CEILING, titleWidth + buttonsAndPadding));
       try {
         const bounds = await getCurrentWindowBounds();
         await animateCurrentWindowBounds({
