@@ -155,6 +155,11 @@ export function NotePad({
   const [tileCollapsed, setTileCollapsed] = useState(false);
   /** 折叠前的窗口尺寸，展开时还原（暂存于内存；Group 9 接入持久化时由 layout 取代） */
   const preCollapseSizeRef = useRef<{ width: number; height: number } | null>(null);
+  /** 折叠/展开动画进行中：onResized 跳过持久化，避免 layout 被动画中间帧污染 */
+  const collapseTransitioningRef = useRef(false);
+  /** ref 镜像 tileCollapsed，保证 onResized 闭包看到的是当前真值 */
+  const tileCollapsedRef = useRef(false);
+  tileCollapsedRef.current = tileCollapsed;
   const [systemThemeNonce, setSystemThemeNonce] = useState(0);
   // 调色板 popover 状态（D4）
   const [paletteState, setPaletteState] = useState<{ open: boolean; x: number; y: number }>({
@@ -487,9 +492,8 @@ export function NotePad({
 
     void win
       .onResized(({ payload }: { payload: PhysicalSize }) => {
-        // 折叠态时不更新 width/height，避免覆盖展开尺寸
-        if (tileCollapsed) {
-          // 仅在 collapsed 切换时由 toggleCollapse 自己处理
+        // 折叠态 / 折叠展开动画进行中：跳过持久化，避免 layout 被动画中间帧污染
+        if (tileCollapsedRef.current || collapseTransitioningRef.current) {
           return;
         }
         scheduleSave({ width: payload.width, height: payload.height });
@@ -507,7 +511,7 @@ export function NotePad({
         layoutSaveTimerRef.current = null;
       }
     };
-  }, [content, editingNoteId, notes, surfaceMode, tileCollapsed, title]);
+  }, [content, editingNoteId, notes, surfaceMode, title]);
 
   // 进入 tile surface 时应用 layout（含越界检查）
   useEffect(() => {
@@ -807,44 +811,52 @@ export function NotePad({
   // 折叠 / 展开（D6）
   const toggleCollapse = useCallback(async () => {
     const wasCollapsed = tileCollapsed;
-    if (!wasCollapsed) {
-      // 折叠前：先记下当前尺寸
-      try {
-        const bounds = await getCurrentWindowBounds();
-        preCollapseSizeRef.current = { width: bounds.width, height: bounds.height };
-      } catch {
-        preCollapseSizeRef.current = null;
-      }
-      setTileCollapsed(true);
-      // 折叠态：窗口高度足以让标题字 + 按钮垂直居中显示。36 太挤字会沉，改用 44。
-      // 宽度恢复 v2 初版公式：标题字符估算 + 按钮组 + padding，足够即可。
-      const COLLAPSED_HEIGHT = 44;
-      const titleLen = title.trim().length;
-      const estimatedTitleWidth = (titleLen || 1) * Math.max(8, surfaceFontSize - 2);
-      const collapsedWidth = Math.max(120, Math.min(280, estimatedTitleWidth + 100));
-      try {
-        const bounds = await getCurrentWindowBounds();
-        await animateCurrentWindowBounds({
-          x: bounds.x,
-          y: bounds.y,
-          width: collapsedWidth,
-          height: COLLAPSED_HEIGHT,
-        }).catch(() => undefined);
-      } catch {
-        /* ignore */
-      }
-      // 标记 layout.collapsed=true（onResized 内的折叠态 guard 会避免污染 width/height）
-      const prev = noteTileLayoutRef.current;
-      if (prev) {
-        const merged = { ...prev, collapsed: true };
-        noteTileLayoutRef.current = merged;
-        setNoteTileLayout(merged);
-      }
-    } else {
-      // 展开：还原到 preCollapseSize
-      const restore = preCollapseSizeRef.current;
-      setTileCollapsed(false);
-      if (restore) {
+    // 折叠/展开动画期间禁止 onResized 写 layout（防止动画中间帧污染持久化尺寸）
+    collapseTransitioningRef.current = true;
+    try {
+      if (!wasCollapsed) {
+        // 折叠前：先记下当前尺寸（先记，再 setTileCollapsed，避免状态与持久化错位）
+        try {
+          const bounds = await getCurrentWindowBounds();
+          preCollapseSizeRef.current = { width: bounds.width, height: bounds.height };
+        } catch {
+          preCollapseSizeRef.current = null;
+        }
+        setTileCollapsed(true);
+        const COLLAPSED_HEIGHT = 44;
+        const titleLen = title.trim().length;
+        const estimatedTitleWidth = (titleLen || 1) * Math.max(8, surfaceFontSize - 2);
+        const collapsedWidth = Math.max(120, Math.min(280, estimatedTitleWidth + 100));
+        try {
+          const bounds = await getCurrentWindowBounds();
+          await animateCurrentWindowBounds({
+            x: bounds.x,
+            y: bounds.y,
+            width: collapsedWidth,
+            height: COLLAPSED_HEIGHT,
+          }).catch(() => undefined);
+        } catch {
+          /* ignore */
+        }
+        const prev = noteTileLayoutRef.current;
+        if (prev) {
+          const merged = { ...prev, collapsed: true };
+          noteTileLayoutRef.current = merged;
+          setNoteTileLayout(merged);
+        }
+      } else {
+        // 展开：还原到 preCollapseSize；若 ref 没有（保险措施失效）→ 用 layout 或默认 280×280
+        let restore = preCollapseSizeRef.current;
+        if (!restore) {
+          const layout = noteTileLayoutRef.current;
+          // 用 layout 里的 width/height（持久化的展开尺寸），但若 layout 自己也是折叠值要兜底
+          if (layout && layout.height > 60) {
+            restore = { width: layout.width, height: layout.height };
+          } else {
+            restore = { width: 280, height: 280 };
+          }
+        }
+        setTileCollapsed(false);
         try {
           const bounds = await getCurrentWindowBounds();
           await animateCurrentWindowBounds({
@@ -856,14 +868,23 @@ export function NotePad({
         } catch {
           /* ignore */
         }
+        const prev = noteTileLayoutRef.current;
+        if (prev) {
+          const merged = {
+            ...prev,
+            collapsed: false,
+            width: restore.width,
+            height: restore.height,
+          };
+          noteTileLayoutRef.current = merged;
+          setNoteTileLayout(merged);
+        }
       }
-      // 标记 layout.collapsed=false
-      const prev = noteTileLayoutRef.current;
-      if (prev) {
-        const merged = { ...prev, collapsed: false };
-        noteTileLayoutRef.current = merged;
-        setNoteTileLayout(merged);
-      }
+    } finally {
+      // 动画完成后短延迟再允许写 layout，跳过尾帧 onResized
+      window.setTimeout(() => {
+        collapseTransitioningRef.current = false;
+      }, 100);
     }
   }, [surfaceFontSize, tileCollapsed, title]);
 
