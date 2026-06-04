@@ -538,9 +538,14 @@ export function NotePad({
         const bounds = resolveLayoutBounds(layout, monitorRects, primaryRect);
         // 折叠态：高 44 强制；宽度走计算的 bounds.width
         const targetHeight = layout.collapsed ? 44 : bounds.height;
-        // 关键：从持久化恢复 collapsed 时，preCollapseSize 也要填上，否则 expand 没数据可还原
+        // 关键：从持久化恢复 collapsed 时，preCollapseSize 用于"双击展开"还原。
+        // 但 layout 自身可能已被旧版本的 race bug 污染（height 写成了 44），
+        // 不能信任。只有 height >= 80 才用 layout，否则用合理默认 280×280。
         if (layout.collapsed && !preCollapseSizeRef.current) {
-          preCollapseSizeRef.current = { width: bounds.width, height: bounds.height };
+          const sane = bounds.height >= 80;
+          preCollapseSizeRef.current = sane
+            ? { width: bounds.width, height: bounds.height }
+            : { width: 280, height: 280 };
         }
         await animateCurrentWindowBounds({
           x: bounds.x,
@@ -845,25 +850,30 @@ export function NotePad({
           setNoteTileLayout(merged);
         }
       } else {
-        // 展开：还原到 preCollapseSize；若 ref 没有（保险措施失效）→ 用 layout 或默认 280×280
+        // 展开：还原到 preCollapseSize；若 ref 没有 / 数据被污染（height 异常小，
+        // 说明是旧版 race bug 留下的折叠尺寸），都回退到默认 280×280
         let restore = preCollapseSizeRef.current;
-        if (!restore) {
+        if (!restore || restore.height < 80) {
           const layout = noteTileLayoutRef.current;
-          // 用 layout 里的 width/height（持久化的展开尺寸），但若 layout 自己也是折叠值要兜底
-          if (layout && layout.height > 60) {
+          if (layout && layout.height >= 80) {
             restore = { width: layout.width, height: layout.height };
           } else {
             restore = { width: 280, height: 280 };
           }
         }
+        // 同步把"清洗后的 restore"写回 ref，防止下次再走这条 fallback 路径
+        preCollapseSizeRef.current = restore;
+        // 最后一道防线：展开高度永远 >= 120，宽度 >= 200（兜底所有 race / 旧污染数据）
+        const finalRestoreHeight = Math.max(120, restore.height);
+        const finalRestoreWidth = Math.max(200, restore.width);
         setTileCollapsed(false);
         try {
           const bounds = await getCurrentWindowBounds();
           await animateCurrentWindowBounds({
             x: bounds.x,
             y: bounds.y,
-            width: restore.width,
-            height: restore.height,
+            width: finalRestoreWidth,
+            height: finalRestoreHeight,
           }).catch(() => undefined);
         } catch {
           /* ignore */
@@ -873,8 +883,8 @@ export function NotePad({
           const merged = {
             ...prev,
             collapsed: false,
-            width: restore.width,
-            height: restore.height,
+            width: finalRestoreWidth,
+            height: finalRestoreHeight,
           };
           noteTileLayoutRef.current = merged;
           setNoteTileLayout(merged);
