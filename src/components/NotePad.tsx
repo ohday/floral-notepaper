@@ -532,8 +532,12 @@ export function NotePad({
             }
           : null;
         const bounds = resolveLayoutBounds(layout, monitorRects, primaryRect);
-        // 折叠态：高 36 强制；宽度走计算的 bounds.width
-        const targetHeight = layout.collapsed ? 36 : bounds.height;
+        // 折叠态：高 44 强制；宽度走计算的 bounds.width
+        const targetHeight = layout.collapsed ? 44 : bounds.height;
+        // 关键：从持久化恢复 collapsed 时，preCollapseSize 也要填上，否则 expand 没数据可还原
+        if (layout.collapsed && !preCollapseSizeRef.current) {
+          preCollapseSizeRef.current = { width: bounds.width, height: bounds.height };
+        }
         await animateCurrentWindowBounds({
           x: bounds.x,
           y: bounds.y,
@@ -812,21 +816,19 @@ export function NotePad({
         preCollapseSizeRef.current = null;
       }
       setTileCollapsed(true);
-      // 折叠后窗口高度 = 36；宽度需容纳标题 + 3 个按钮组（≈ 88px）+ 左右 padding
-      // 对中文字符更宽容：每字按 fontSize+1 估算（比英文略宽，给 ellipsis 留余量）
+      // 折叠态：窗口高度足以让标题字 + 按钮垂直居中显示。36 太挤字会沉，改用 44。
+      // 宽度恢复 v2 初版公式：标题字符估算 + 按钮组 + padding，足够即可。
+      const COLLAPSED_HEIGHT = 44;
       const titleLen = title.trim().length;
-      const titleWidth = Math.min(titleLen * (surfaceFontSize + 1) + 24, 280);
-      const buttonsAndPadding = 110;
-      const FLOOR = 220;
-      const CEILING = 420;
-      const collapsedWidth = Math.max(FLOOR, Math.min(CEILING, titleWidth + buttonsAndPadding));
+      const estimatedTitleWidth = (titleLen || 1) * Math.max(8, surfaceFontSize - 2);
+      const collapsedWidth = Math.max(120, Math.min(280, estimatedTitleWidth + 100));
       try {
         const bounds = await getCurrentWindowBounds();
         await animateCurrentWindowBounds({
           x: bounds.x,
           y: bounds.y,
           width: collapsedWidth,
-          height: 36,
+          height: COLLAPSED_HEIGHT,
         }).catch(() => undefined);
       } catch {
         /* ignore */
